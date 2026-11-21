@@ -1,0 +1,54 @@
+---
+title: Names
+description: How <handle>.keycat.eth resolves through an offchain ENS resolver with signed CCIP-read answers, and what that means for trust.
+---
+
+# Names
+
+Every business handle is also an [ENS](https://ens.domains) name,
+`<handle>.keycat.eth`. Wallets and apps that support ENS resolve it to the
+business account's address and read its public profile.
+
+## How it resolves
+
+`keycat.eth` on Ethereum mainnet points at an offchain resolver,
+`0xFA88f268a60F7E9a97Db7271dCB2E8468b841115`, that supports wildcard names
+(ENSIP-10) and answers through CCIP-read (EIP-3668):
+
+1. A client calls `resolve(name, data)` on the resolver.
+2. The resolver reverts with `OffchainLookup`, naming Keycat's gateway.
+3. The client asks the gateway, which answers from Keycat's records and signs
+   the answer.
+4. The client passes the answer back to the resolver's callback, which checks
+   the signature against its configured signer and returns the result.
+
+The signed digest binds the answer to the resolver, the exact question and an
+expiry, in EIP-191 version `0x00` form:
+
+```text
+keccak256(0x1900 ‖ resolver ‖ uint64(expires) ‖ keccak256(callData) ‖ keccak256(result))
+```
+
+Answers expire after a few minutes, so a stale signed answer cannot be
+replayed for long.
+
+## What a name returns
+
+| Record | Value |
+| --- | --- |
+| `addr` (coin type 60, and the ENSIP-11 coin types of EVM networks) | The business account's address |
+| `text: name, description, avatar, url, header` | The public profile |
+| `text: com.twitter, org.telegram` | Social handles, when set |
+
+Any other record answers empty. Keycat re-resolves its own names through the
+resolver on a schedule and raises an alert on any answer that differs from its
+records.
+
+## Trust
+
+Resolution trusts Keycat's signing key: whoever holds it can make a name
+resolve to any address. Keycat keeps that key apart from everything else it
+runs, and it signs nothing but these 32-byte digests. A name is a convenience
+for finding a business; for a payment that matters, use a charge or the
+business's payment page, which route the payment from Keycat's records rather
+than from name resolution.

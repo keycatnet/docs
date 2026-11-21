@@ -1,0 +1,42 @@
+---
+title: Drop-in button
+description: Add a pay button to any web page with one script tag, for a payment link you created.
+---
+
+import { Callout } from "nextra/components";
+
+# Drop-in button
+
+One script tag turns any button into a Keycat checkout for a charge you have
+already created, usually a [reusable payment link](/guides/payment-pages#payment-links):
+
+```html
+<script src="https://keycat.net/keycat.js" defer></script>
+
+<button data-keycat-charge="chg_7c1f0e9a2b4d4c8e9f0a1b2c">Buy the tee, $24.50</button>
+```
+
+`data-keycat-charge` takes the charge's id or its `hosted_url`. Create the
+charge under **Request** in the dashboard, or with the API:
+
+```ts
+const link = await keycat.createCharge({ amount: "24.50", description: "Everyday tee", reusable: true }, { idempotencyKey: "tee-link" });
+// link.id goes in data-keycat-charge
+```
+
+A click opens checkout on `pay.keycat.net` in a popup, or in the same tab when
+popups are blocked. The page needs no API key, and your settlement address
+never appears in it.
+
+The price, description and line items belong to the charge, so nothing in your
+page's HTML can change what the customer pays. A reusable charge takes any
+number of payments, and each one sends its own `charge.paid` webhook.
+
+Buttons added after the page loads are picked up by calling `Keycat.bind()`.
+`Keycat.open(button)` opens checkout from your own code.
+
+<Callout>
+  For a price that depends on the order, such as a cart total, create a one-off
+  charge on your server instead and send the customer to its `hosted_url`. See
+  the [Quickstart](/quickstart).
+</Callout>

@@ -1,0 +1,161 @@
+---
+title: Webhooks
+description: Every event, its payload, how deliveries are signed and retried, and how to replay what you missed.
+---
+
+import { Callout } from "nextra/components";
+
+# Webhooks
+
+Keycat sends each event as a signed `POST` to your endpoint. Set the endpoint
+under **Settings → Integrate**, or with
+[`POST /v1/webhook-endpoint`](/api#webhook-endpoint). The signing secret
+(`whsec_…`) is shown once.
+
+## Payload
+
+```json
+{
+  "id": "evt_5e2b7c0d9a1f4b3c8e6d2a10",
+  "type": "charge.paid",
+  "data": {
+    "charge": "chg_7c1f0e9a2b4d4c8e9f0a1b2c",
+    "payment": "pay_…",
+    "status": "paid",
+    "paid_total": "24.5",
+    "amount": "24.50",
+    "source": "api",
+    "occurred_at": "2026-10-07T12:03:11.000Z"
+  },
+  "created_at": "2026-10-07T12:03:11.000Z"
+}
+```
+
+`id` identifies the event and stays the same across retries and replay. Make your
+handler idempotent on it: record it alongside the side effect, and skip events
+you have already handled.
+
+## Events
+
+| `type` | When | `data` |
+| --- | --- | --- |
+| `charge.pending` | A charge was created with your API key or under **Request** in the dashboard. | `id`, `status`, `amount`, `reference`, `hosted_url`, `created_at` |
+| `charge.paid` | Payments now cover the amount. A reusable charge sends one per payment and stays `open`. | `charge`, `payment`, `status`, `paid_total`, `amount`, `source`, `occurred_at` |
+| `charge.underpaid` | A payment landed short, or the window closed with a partial payment. | Either the `charge.paid` shape, or `charge`, `status`, `amount`, `paid_total`, `reference`, `expired_at` |
+| `charge.expired` | The window closed with nothing paid. | `charge`, `status`, `amount`, `paid_total`, `reference`, `expired_at` |
+| `charge.reversed` | A settled payment was undone. | `charge`, `payment`, `reversed_at` |
+| `refund.succeeded` | A refund reached the customer. | `refund`, `charge`, `payment`, `amount`, `paid_amount`, `destination`, `transaction_hash` |
+| `refund.failed` | A refund converted to the customer's coin could not be delivered; the money came back to your account. | `refund`, `charge`, `payment`, `amount`, `returned_to` |
+
+In `charge.pending` the charge id is `data.id`; in every other charge event it
+is `data.charge`. Amounts are strings. `paid_total` can have up to six decimals,
+because USDC has six. New event types may be added, so acknowledge any type you
+do not recognise with a `2xx`.
+
+<Callout type="warning">
+  Match each event to an order by the charge id you stored when you created the
+  charge, and compare `data.paid_total` with that order before you ship. Only
+  charges you created carry your amount and reference. A visitor to your
+  [payment page](/guides/payment-pages) can start a payment too; its events have
+  `source: "handle_page"` and a payer-chosen amount, and belong to no order.
+</Callout>
+
+### charge.reversed
+
+This is the event card gateways don't have, and the one most often ignored. A
+settled payment can, rarely, be undone when a network reorganises. An
+integration that ignores it will one day ship goods against money that is no
+longer there. Treat it like a chargeback you cannot dispute: stop or reverse
+fulfilment, and mark the order unpaid.
+
+## Verifying signatures
+
+Each delivery carries:
+
+```http
+X-Keycat-Signature: t=1791374591,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+```
+
+`v1` is the hex HMAC-SHA256 of `${t}.${rawBody}`, keyed with your secret. The
+layout is the same as Stripe's, so existing verification code carries over.
+
+With the SDK:
+
+```ts
+import { constructWebhookEvent } from "@keycatpay/sdk";
+
+const event = await constructWebhookEvent({
+  rawBody: await request.text(),
+  signature: request.headers.get("x-keycat-signature"),
+  secret: process.env.KEYCAT_WEBHOOK_SECRET!,
+});
+```
+
+Without it, in any language:
+
+1. Read the body as raw bytes. Parsing and re-serialising the JSON changes the
+   bytes, and the signature will not match.
+2. Split the header on `,` into `t` and one or more `v1` values.
+3. Reject the request if `t` is more than five minutes from your clock, in
+   either direction. That window is what stops an old delivery from being
+   replayed.
+4. Compute HMAC-SHA256 over `t + "." + rawBody` with the secret, as hex, and
+   compare it to each `v1` in constant time. Accept if any matches.
+
+```python
+import hashlib, hmac, time
+
+def verify(raw_body: bytes, header: str, secret: str, tolerance: int = 300) -> bool:
+    parts = [p.split("=", 1) for p in header.split(",") if "=" in p]
+    t = next((v for k, v in parts if k == "t"), None)
+    signatures = [v for k, v in parts if k == "v1"]
+    if not t or not t.isdigit() or abs(time.time() - int(t)) > tolerance:
+        return False
+    expected = hmac.new(secret.encode(), t.encode() + b"." + raw_body, hashlib.sha256).hexdigest()
+    return any(hmac.compare_digest(expected, s) for s in signatures)
+```
+
+## Delivery and retries
+
+- Keycat delivers new events within about two minutes, oldest first, as a
+  `POST` with `Content-Type: application/json` and
+  `User-Agent: Keycat-Webhook/1.0`.
+- Any `2xx` response acknowledges the event. Anything else, or no answer, counts
+  as a failure.
+- A failed delivery is retried with exponential backoff: no sooner than 30
+  seconds, then 1, 2, 4, 8, 16, and 32 minutes, for eight attempts in about an
+  hour. Retries go out on the same two-minute rhythm, so each delay rounds up.
+  After the eighth attempt delivery stops, and the event stays available to
+  [replay](#replaying-events).
+- Retries can reorder events, so order events by their content, not by when
+  they arrived. For example, ignore `charge.pending` for a charge you already
+  know is paid.
+
+Answer quickly and do slow work afterwards; a handler that times out counts as
+a failure and is retried.
+
+## Replaying events
+
+Events stay available after delivery stops, so an outage costs you nothing.
+Walk the full history and handle whatever your endpoint never acknowledged:
+
+```ts
+for await (const event of keycat.iterateEvents()) {
+  if (event.delivered_at === null) await handle(event);
+}
+```
+
+Or page through [`GET /v1/events`](/api#events) yourself.
+
+## Testing your handler
+
+`signWebhookPayload` produces a valid header for any payload, so you can test
+your handler without a live payment:
+
+```ts
+import { signWebhookPayload } from "@keycatpay/sdk";
+
+const payload = JSON.stringify({ id: "evt_test", type: "charge.paid", data: { charge: "chg_test" }, created_at: new Date().toISOString() });
+const signature = await signWebhookPayload({ payload, secret: process.env.KEYCAT_WEBHOOK_SECRET! });
+await fetch("http://localhost:3000/api/keycat", { method: "POST", headers: { "x-keycat-signature": signature }, body: payload });
+```

@@ -1,0 +1,102 @@
+---
+title: How customers pay
+description: By card, or in any coin Relay can route from a supported network. You receive USDC on Base either way, and the payer covers the fees.
+---
+
+# How customers pay
+
+The customer opens the charge's hosted page and chooses **Pay with card** or
+**Pay with crypto**. Either way you receive exactly the invoice amount as USDC
+on Base, and the customer sees the full price before paying.
+
+## By card
+
+The customer pays with a debit or credit card, or Apple Pay or Google Pay where
+the provider supports it. They never see a wallet, an address, or a token.
+
+1. Checkout asks several card providers at once for a price: Stripe, Transak,
+   Rampnow, and Coinbase. Each is asked to deliver exactly the amount the
+   payment needs, and any provider that cannot is left out.
+2. The customer picks a provider from the list, each shown with its total
+   price, and continues to that provider's page to pay.
+3. The provider delivers USDC on Base, and Keycat settles it to your account
+   the same way as any other payment. The checkout page turns into the receipt
+   when it arrives.
+
+The card provider is the customer's merchant for the card transaction, so it
+runs its own identity checks, usually once, on the customer's first purchase.
+Neither you nor Keycat has an account with any provider, and you never collect
+the customer's card or identity details. Which providers appear depends on the
+customer's country and the amount. Coinbase asks the customer to sign in with a
+Coinbase account, so it is listed last.
+
+## With crypto
+
+The customer picks what they hold: a coin and the network it is on. Checkout
+offers EVM networks and Bitcoin, with dollar coins first, and opens on USDC on
+Base, which needs no conversion. It shows the exact amount to send, fees
+included, and a deposit address for this payment. The customer sends from any
+wallet or exchange; nothing needs connecting or signing in.
+
+Keycat routes the payment through [Relay](https://relay.link), which converts
+it and delivers exactly the invoice amount as USDC on Base. The amount shown is
+rounded up to a cent's precision in the payer's coin, so a wallet that trims
+decimals still sends enough. A route whose cost would be more than a tenth of
+the payment is not offered; for small payments that usually rules out
+Ethereum mainnet. [Payment routing and settlement](/protocol/settlement)
+has the full quote and every rule behind it.
+
+## Settlement
+
+USDC arrives in your business account on Base. Most payments settle within a
+minute; a payment from an exchange takes as long as that exchange's withdrawal.
+
+A payment on a link that names a [payout group](/account#payout-groups)
+settles instead to that group's split, which pays each payee and your business
+their shares, usually a few seconds later and within a minute at most. You
+never hold the payees' money.
+
+Keycat watches every payment two ways: Relay's signed notification, and its
+own polling of the payment's status. Neither depends on the other, so a missed
+notification only delays a status update.
+
+## Fees
+
+You always receive the full invoice amount. Fees are added to what the customer
+sends:
+
+| | Payer pays |
+| --- | --- |
+| Keycat fee, checkout and fixed-price links | 1% of the amount, at least $0.025 |
+| Keycat fee, amounts the payer chooses on your payment page | none |
+| Network and routing costs | the actual cost, shown in the quote |
+| Card provider fee, card payments only | set by the provider, included in the price on the provider list |
+
+The quote at checkout is the whole price: what the customer sends, or what
+their card is charged, is exactly what it says. Card payments cost the payer
+more than crypto, because the card provider adds its own fee.
+
+## Reversals
+
+A payment that settled can, rarely, be undone when Base reorganises. Keycat
+marks the charge `reversed` and sends
+[`charge.reversed`](/webhooks#chargereversed). A transfer that has
+settled to your account on Base cannot be pulled back, card payments included:
+a card dispute is between the customer and the card provider that sold them the
+USDC.
+
+## Where money goes back to
+
+Before checkout shows the address to pay, it asks the customer where they are
+paying from. Paying from a wallet app, anything sent back goes to the address
+that sent it. Paying from an exchange account, the customer enters their own
+deposit address there, because an exchange sends from a shared wallet and money
+returned to it never reaches them.
+
+That answer is used twice. A payment that arrives short, late, or in the wrong
+coin or network goes straight back there, and checkout says so, with the
+amount and the transaction. Nothing short is passed to you as a partial
+payment. And a refund you send later goes there too. See [Refunds](/refunds).
+
+A card payment that cannot be completed after the provider delivered it lands
+in your account, and is recorded as a payment of what arrived.

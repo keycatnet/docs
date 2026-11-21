@@ -1,0 +1,42 @@
+---
+title: Moving from Coinbase Commerce
+description: Bring your Commerce history across and switch over without downtime.
+---
+
+import { Steps } from "nextra/components";
+
+# Moving from Coinbase Commerce
+
+<Steps>
+
+### Import your history
+
+Export your charges from Coinbase Commerce as CSV. In Keycat, open your
+business's **Settings → Import your Commerce history** and upload the file.
+
+Keycat reads each row's id, status, amount, currency, description, and date,
+matching Commerce's usual column names. Imported records are history only: they
+never create a charge or a refund, and never move money. Importing the same file
+again skips rows already imported.
+
+### Switch your integration
+
+Replace Commerce's payment links with your [payment page](/guides/payment-pages)
+or reusable charges. Replace API-created charges with
+[`createCharge`](/quickstart). The concepts map closely:
+
+| Coinbase Commerce | Keycat |
+| --- | --- |
+| Charge | [Charge](/charges) |
+| Checkout | Reusable charge |
+| `charge:confirmed` | `charge.paid` |
+| `charge:failed` (expired) | `charge.expired` |
+| `X-CC-Webhook-Signature` | `X-Keycat-Signature`, [timestamped](/webhooks#verifying-signatures) |
+
+### Test, then turn off the old one
+
+Send a small payment to yourself through the new integration and confirm your
+webhook handler sees it. Run both side by side for as long as you like before
+removing Commerce.
+
+</Steps>

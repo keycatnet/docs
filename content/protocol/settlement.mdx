@@ -1,0 +1,150 @@
+---
+title: Payment routing and settlement
+description: How a payment in any coin on any supported network becomes exactly the invoice in USDC on Base, and what happens when it cannot.
+---
+
+import { Callout } from "nextra/components";
+
+# Payment routing and settlement
+
+Keycat deploys nothing for payments. Each payment attempt is a
+[Relay](https://relay.link) strict deposit address: a one-off address on the
+payer's network that Relay watches, and that settles to your business account
+on Base when the right amount arrives.
+
+## One attempt
+
+When the payer picks a coin and network, checkout asks Keycat for a quote, and
+Keycat asks Relay for this:
+
+```json
+{
+  "originChainId": 42161,
+  "originCurrency": "<the payer's coin>",
+  "destinationChainId": 8453,
+  "destinationCurrency": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "amount": "24500000",
+  "tradeType": "EXACT_OUTPUT",
+  "recipient": "<your business account, or your payout group's split>",
+  "refundTo": "<where the payer said a return should go>",
+  "recoveryAddress": "<Keycat's recovery address on that network>",
+  "useDepositAddress": true,
+  "strict": true,
+  "ttl": 3600,
+  "appFees": [{ "recipient": "<Keycat>", "fee": "100" }]
+}
+```
+
+- **`EXACT_OUTPUT`** of the invoice amount, in USDC base units (six
+  decimals). The recipient receives exactly the invoice; every cost is added to
+  what the payer sends.
+- **`strict`** deposit address. Relay fills only when the deposit covers the
+  quote. An amount that falls short is returned instead of being converted
+  into a smaller payment, so your business never receives a silent partial.
+- **`appFees`** is Keycat's 1% (100 basis points), charged by Relay on the
+  input side, with Relay's minimum of $0.025 per transaction. A payment on a
+  business's own payment page, where the payer chooses the amount, has no app
+  fee.
+- **`ttl`** of one hour. Each attempt has its own window. A charge stays open
+  while any attempt on it is still open, and a payment that lands within its
+  attempt's window pays the charge even if the charge has expired since.
+
+The recipient is read from the business's own record when the attempt is
+created, never from the browser. Payments through a payout group go to that
+group's split address, which is fixed for the group's lifetime.
+
+### The amount to send
+
+Relay quotes the input with every decimal of the payer's coin, and many
+wallets cut what you paste to eight places, which lands short of a strict
+address. Keycat rounds the input **up** to the fewest decimals at which the
+last digit is worth at most one cent (from Relay's own dollar value for the
+input; never more than eight places or the coin's own precision). ETH at about
+$1,800 is shown to six places, USDC to two. The surplus, under a cent, is
+Relay's to refund or keep. Checkout shows and copies that one string verbatim.
+
+### Routes
+
+Checkout lists the coins and networks Relay can route right now, limited to EVM
+networks and Bitcoin, with dollar coins first. Each network needs a Keycat
+recovery address of its own, and a network without one is not offered. A
+quote whose routing fee is more than a tenth of the payment is refused
+(`route_too_costly`), which for small payments usually means Ethereum
+mainnet. Solana, Tron, TON, XRP and others are not offered.
+
+## Where a return goes
+
+Before checkout shows a deposit address it asks where the payer is paying
+from, and that answer becomes the quote's `refundTo`:
+
+| Payer chose | `refundTo` |
+| --- | --- |
+| A wallet app | Relay's original-sender value for that network, so a return goes to the address that sent the deposit. |
+| An exchange account | The address the payer typed, which they own at that exchange. Exchanges send from shared wallets, so a return to the sender would not reach them. |
+| Card | Your business account (see [By card](#by-card)). |
+
+A typed address is checked in the browser and again by the API: EIP-55
+checksums for mixed-case EVM addresses, bech32 and bech32m or base58check for
+Bitcoin. The API refuses your business's own addresses, Keycat's, and the
+attempt's own deposit address.
+
+`recoveryAddress` is separate: it is where Relay sends a deposit it can
+neither fill nor return. It is a Keycat address on that network, and should
+never receive anything. If a payment of yours ever ends up there, contact
+support with the attempt's deposit address.
+
+## Returned payments
+
+When Relay reports a request as refunded and it did not fill, the attempt
+becomes `returned`, with Relay's reason, the sender, the amount returned and
+the return's transaction. Checkout shows that record to the payer, with a
+**Try again** while the charge still takes payments. A request that did fill
+is a payment even if Relay also refunded part of it: an overpayment's surplus
+is returned on the same request.
+
+## How Keycat learns of a payment
+
+Two independent paths feed one idempotent transition:
+
+1. **Relay's signed notification.** Relay posts each status change with an
+   HMAC signature and a timestamp. Keycat accepts a signed notification up to
+   an hour old, so Relay's own retries land.
+2. **Polling.** The open checkout page reads its attempt, and Keycat queries
+   Relay's requests by deposit address, children included, every minute until
+   an hour after the attempt's window closes, then less often: every fifteen
+   minutes for a day, hourly for a week, then daily.
+
+Either path records the same payment with the same ids, so a missed
+notification only delays the update, and neither path can record a payment
+twice. A payment is recorded from Relay's destination fill, and the
+destination transaction hash on Base is stored with it.
+
+## Settlement and finality
+
+A payment is settled when its USDC transfer on Base is in a block. Base is an
+optimistic rollup that posts to Ethereum; a reorganisation of recent Base
+blocks is rare, and Keycat reports one as `charge.reversed`. There are no
+chargebacks: a transfer to your account cannot be pulled back by the payer or
+by Keycat.
+
+## By card
+
+A card payment is the same Relay rail with a fiat onramp in front of it.
+Keycat opens an attempt whose origin is USDC on Base, then asks several onramp
+providers for exactly the quote's input, delivered as USDC on Base to the
+deposit address with no swap. Any provider whose answer would deliver a
+different amount, to a different address, or after a conversion is dropped,
+because a strict deposit address returns anything else. The payer chooses
+among the exact answers; Keycat records the choice from its stored quotes,
+never from the browser.
+
+The card attempt's `refundTo` is your business account, because USDC on Base
+in and out means a fill Relay cannot make lands where the fill would have.
+Keycat records what arrived as a payment: it pays the charge if it covers the
+invoice, and leaves it `underpaid` otherwise.
+
+<Callout>
+  The onramp provider is the payer's merchant for the card transaction and runs
+  its own identity checks. A card dispute is between the payer and that
+  provider; the USDC that reached your account stays there.
+</Callout>

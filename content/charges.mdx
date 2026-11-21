@@ -1,0 +1,87 @@
+---
+title: Charges and payment links
+description: One resource for checkouts and fixed-price payment links, and every status a charge can reach.
+---
+
+# Charges and payment links
+
+A **charge** is a request to be paid. Each charge has a hosted checkout page
+(`hosted_url`) and, once paid, a receipt (`receipt_url`). There is no separate
+resource for payment links: a payment link is a reusable charge.
+
+## Two shapes
+
+| Use | Create with | Expires | Keycat fee |
+| --- | --- | --- | --- |
+| One-off checkout | `{ amount: "24.50" }` | after 1 hour | 1% |
+| Fixed-price link | `{ amount: "50.00", reusable: true }` | never | 1% |
+
+A charge always has an amount. The only payments where the payer chooses the
+amount, with no Keycat fee, start on your
+[payment page](/guides/payment-pages), and checkout asks the payer for the
+amount itself. A charge created through the API or the dashboard always pays
+the fee.
+
+## Fields
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `amount` | string | US dollars, up to two decimals. Required. |
+| `description` | string | Up to 500 characters. Shown at checkout. |
+| `items` | array | Up to 50 lines of `{ name, qty, amount }`. `name` is up to 200 characters, `qty` is a whole number from 1 to 100,000, and `amount` is the unit price. Shown at checkout and on the receipt. |
+| `reference` | string | Your own id, up to 255 characters. Echoed on the charge and on its expiry and pending events. |
+| `reusable` | boolean | Default `false`. A reusable charge accepts any number of payments. |
+| `expires_at` | ISO 8601 or `null` | Overrides the default expiry. `null` means never. |
+| `redirect_url` | HTTPS URL | Where checkout sends the customer after a successful payment. |
+| `locale` | string | Sets the checkout language: `en`, `es`, `pt`, `tr`, `ar`, `fa`, `id`, or `vi`. A language the customer chose themselves takes precedence; otherwise checkout follows the customer's browser. |
+| `entitlement` | object | An access period: `{ kind, starts_at, ends_at, renewable }`, where `kind` is `subscription`, `pass`, or `access`. |
+| `payout_group` | string | A [payout group](/account#payout-groups) id (`spl_…`) set up in the dashboard. Its payees share each payment on this charge, paid within a minute. Leave it out to keep every payment. |
+
+Every charge also reports `source`, which you cannot set: `api` for one created
+with your secret key, `dashboard` for one created under **Request**, and
+`handle_page` for a payment a visitor started on your
+[payment page](/guides/payment-pages). Only `api` and `dashboard` charges carry
+your own amount, description and reference.
+
+## Statuses
+
+```text
+open ──┬── payments cover the amount ─────────> paid ──┐
+       ├── a payment lands short ─────────────> underpaid
+       ├── window closes, part paid ──────────> underpaid
+       ├── window closes, nothing paid ───────> expired
+       └── you cancel it ─────────────────────> cancelled
+                                                       │
+                       network reorganisation ─────────┴──> reversed
+```
+
+| Status | Meaning |
+| --- | --- |
+| `open` | Waiting for payment. A reusable charge stays `open` for its whole life. |
+| `paid` | Payments add up to at least the amount. |
+| `underpaid` | Money arrived, but less than the amount. It is yours; decide whether to ship. |
+| `expired` | The checkout window closed with nothing paid. |
+| `cancelled` | You cancelled it while it was open. Its page no longer accepts payment. |
+| `reversed` | A settled payment was undone by a network reorganisation. Treat the order as unpaid. |
+
+Only an `open` charge can be cancelled.
+
+## Late and duplicate payments
+
+Each payment attempt has its own one-hour window, and a payment that misses it
+is normally sent back to the payer ([how](/protocol/settlement#returned-payments)).
+Two cases still reach you:
+
+- Relay fills a deposit after its window closed. The payment belongs to the
+  charge it was made for, for up to 90 days after the charge expired.
+- A customer pays a one-off charge that another payment already covered.
+
+Both are listed under **Needs attention** in the dashboard, where you mark
+each as accepted, or as a credit you owe the customer. Refund it if you would
+rather send it back.
+
+## Receipts
+
+Once a charge has a settled payment, its `receipt_url` shows the business, the
+line items, and each payment. Share it with your customer; it contains nothing
+private.

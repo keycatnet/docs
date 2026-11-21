@@ -1,0 +1,99 @@
+---
+title: How Keycat works
+description: The contracts, standards and trust boundaries behind a Keycat business account, for developers who want to check them.
+---
+
+import { Cards } from "nextra/components";
+
+# How Keycat works
+
+This section is for developers and advanced users who want to know what
+happens underneath: which contracts hold the money, what a passkey actually
+signs, what Keycat can and cannot do with your account, and how to check each
+claim on chain yourself. The rest of the docs describe what to build; these
+pages describe what you are trusting.
+
+Everything here is on Base (chain id 8453) unless a page says otherwise.
+
+<Cards>
+  <Cards.Card title="The business account" href="/protocol/account" arrow />
+  <Cards.Card title="Passkeys and owners" href="/protocol/passkeys" arrow />
+  <Cards.Card title="Operations and network fees" href="/protocol/operations" arrow />
+  <Cards.Card title="Payment routing and settlement" href="/protocol/settlement" arrow />
+  <Cards.Card title="Savings" href="/protocol/savings" arrow />
+  <Cards.Card title="Payout groups" href="/protocol/payouts" arrow />
+  <Cards.Card title="Names" href="/protocol/names" arrow />
+  <Cards.Card title="Contracts and verification" href="/protocol/contracts" arrow />
+</Cards>
+
+## The design in one paragraph
+
+Each business is a [Safe](https://safe.global) smart account (SafeL2 1.4.1)
+whose only owner, at creation, is a WebAuthn signer contract bound to the
+business owner's passkey. The Safe runs ERC-4337 operations through Safe's
+4337 module on EntryPoint v0.7, and pays their gas in its own USDC through
+Circle's paymaster, so it never holds ETH. Customers pay through
+[Relay](https://relay.link) deposit addresses that deliver exactly the invoice
+in USDC to the Safe. Savings lend idle USDC to Aave V3 through a Zodiac Roles
+modifier that lets Keycat supply, and nothing else. Payout groups are
+ownerless 0xSplits push splits. Keycat writes no contracts of its own: every
+contract on the money path was written, audited and deployed by its publisher,
+and Keycat pins and verifies their addresses.
+
+## What Keycat can do
+
+- Decide where a new payment is routed. Checkout asks Relay for a quote whose
+  recipient is your business account (or your payout group's split), and
+  shows the payer that quote. This is the largest thing you trust Keycat
+  with: a compromised Keycat could route future payments elsewhere. It cannot
+  reach money that has already arrived.
+- Prepare an operation for you to sign. Keycat builds every withdrawal,
+  refund, savings change and payout group from a fixed menu, and shows it in
+  full before your passkey signs. Your passkey signs a hash of the exact
+  operation, so a change after you review it invalidates the signature.
+- Supply your available USDC to Aave on your behalf, once you turn savings
+  on. The permission is scoped on chain to supplying USDC into a position
+  owned by your Safe. See [Savings](/protocol/savings).
+- Pay out a payout group's split. Distribution is a permissionless call; it
+  sends shares to the addresses fixed when the split was created, and nowhere
+  else. See [Payout groups](/protocol/payouts).
+- Answer for `<handle>.keycat.eth`. Name resolution is signed by Keycat. See
+  [Names](/protocol/names).
+
+## What Keycat cannot do
+
+- Move money out of your Safe. No Keycat key is an owner of your Safe, and no
+  module Keycat controls can transfer from it. The savings modifier can only
+  call Aave's `supply` with your Safe as the beneficiary, and USDC's `approve`
+  with the Aave pool as the spender.
+- Redeem your savings. Aave `withdraw` is not in the scope Keycat holds;
+  only an owner's signature takes money out of Aave.
+- Change a payout group. Each split is created with no owner and cannot be
+  edited by anyone.
+- Spend your USDC on gas beyond a bound. The Safe approves Circle's paymaster
+  for a fixed allowance, and Circle charges each operation only what that
+  operation used, against a cap you approve when you sign.
+
+## Keycat's own accounts
+
+Keycat operates three on-chain accounts, each an ordinary Safe on the same
+stack as yours, with one key and gas paid in its own USDC:
+
+| Account | What it calls | Why |
+| --- | --- | --- |
+| Signer publisher | `SafeWebAuthnSignerFactory.createSigner` | Publishes the signer contract for a passkey before its first signature is needed. The call is permissionless and its result depends only on the passkey's public key. |
+| Savings operator | Your Roles modifier, within its scope | Supplies available USDC to Aave on behalf of your Safe. |
+| Payouts operator | `PushSplit.distribute` | Pays out a payout group's split. Anyone could make this call. |
+
+None of them holds or needs ETH, and none is an owner of any business
+account. The worst a stolen operator key can do is spend that operator's own
+gas, publish a signer contract that anyone could publish, move a business's
+available USDC into that business's own savings, or pay out a split to the
+payees it already names.
+
+## Where to start
+
+If you want to verify rather than read, go to
+[Contracts and verification](/protocol/contracts): it lists every contract
+address Keycat uses and how to check that your business account was derived
+from your passkey.

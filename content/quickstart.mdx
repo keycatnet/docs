@@ -1,0 +1,107 @@
+---
+title: Quickstart
+description: Create a charge, send the customer to checkout, and verify the webhook that says they paid.
+---
+
+import { Callout, Steps } from "nextra/components";
+
+# Quickstart
+
+A working integration takes about fifteen minutes: create a charge on your
+server, redirect to the hosted checkout, and fulfil the order when a signed
+webhook says it was paid.
+
+<Callout type="warning">
+  There is no test mode. Every charge settles real USDC. Test with a small
+  amount, and refund it from the dashboard if you need it back.
+</Callout>
+
+<Steps>
+
+### Create an API key
+
+Open your business at [app.keycat.net](https://app.keycat.net) and go to
+**Settings → Integrate → API key**. The key starts with `sk_` and is shown
+once; Keycat stores only a hash of it. It can create and read charges for that
+business but cannot move money. Keep it on your server.
+
+```bash
+npm install @keycatpay/sdk
+```
+
+Not using Node.js? Every step below is one HTTP request; see the
+[HTTP API](/api).
+
+### Create a charge on your server
+
+```ts
+import { KeycatClient } from "@keycatpay/sdk";
+
+const keycat = new KeycatClient({ apiKey: process.env.KEYCAT_API_KEY! });
+
+export async function checkout(order: Order) {
+  const charge = await keycat.createCharge(
+    { amount: order.total, description: order.summary, reference: order.id },
+    { idempotencyKey: order.id },
+  );
+  return charge.hosted_url;
+}
+```
+
+`amount` is a string in US dollars with up to two decimals, such as `"24.50"`.
+Use your order id as the idempotency key, so a customer who double-clicks gets
+one charge, not two.
+
+### Send the customer to checkout
+
+Redirect to `charge.hosted_url`. The page runs on `pay.keycat.net`, which serves
+checkout and nothing else: no analytics, no tag manager, and no third-party
+script. To bring the customer back afterwards, pass an HTTPS `redirect_url`
+when you create the charge. The redirect is not proof of payment; the webhook
+is.
+
+### Receive the webhook
+
+Under **Settings → Integrate**, set your endpoint URL. Keycat shows the signing
+secret once; store it as `KEYCAT_WEBHOOK_SECRET`.
+
+```ts
+import { constructWebhookEvent, KeycatSignatureVerificationError } from "@keycatpay/sdk";
+
+export async function POST(request: Request) {
+  let event;
+  try {
+    event = await constructWebhookEvent({
+      rawBody: await request.text(),
+      signature: request.headers.get("x-keycat-signature"),
+      secret: process.env.KEYCAT_WEBHOOK_SECRET!,
+    });
+  } catch (error) {
+    if (error instanceof KeycatSignatureVerificationError) return new Response(null, { status: 400 });
+    throw error;
+  }
+
+  if (event.type === "charge.paid") await fulfil(event.data.charge, event.id);
+  if (event.type === "charge.reversed") await holdOrder(event.data.charge);
+  return new Response(null, { status: 204 });
+}
+```
+
+Fulfil on `charge.paid`, and make the handler idempotent on `event.id`, since a
+delivery can arrive more than once. Handle
+[`charge.reversed`](/webhooks#chargereversed) too.
+
+### Try it
+
+Create a charge for a dollar, open its `hosted_url`, and pay it. Your endpoint
+receives `charge.pending` when the charge is created and `charge.paid` once the
+payment settles on Base. Deliveries go out every two minutes or so.
+
+</Steps>
+
+## Next
+
+- [Charges and payment links](/charges): reusable links, expiry, and every status.
+- [Webhooks](/webhooks): every event and its payload.
+- [How customers pay](/payments): networks, fees, and settlement.
+- [How Keycat works](/protocol): the contracts and permissions underneath.

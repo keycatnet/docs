@@ -1,0 +1,136 @@
+---
+title: Node.js SDK
+description: "@keycatpay/sdk: charges, event replay, webhook verification, retries, and typed errors."
+---
+
+import { Callout } from "nextra/components";
+
+# Node.js SDK
+
+`@keycatpay/sdk` is the server-side client for the [HTTP API](/api). It has no
+runtime dependencies and runs on Node 20 and later, Bun, Deno, Cloudflare
+Workers, and Vercel or Next.js server runtimes. It ships ESM and CommonJS with
+full types.
+
+```bash
+npm install @keycatpay/sdk
+```
+
+```ts
+import { KeycatClient } from "@keycatpay/sdk";
+
+const keycat = new KeycatClient({ apiKey: process.env.KEYCAT_API_KEY! });
+```
+
+<Callout type="warning">
+  The constructor refuses to run in a browser. An API key is a secret for your
+  business, and the API rejects cross-origin calls from other sites anyway.
+</Callout>
+
+## Charges
+
+```ts
+const charge = await keycat.createCharge({
+  amount: "24.50",
+  description: "Large latte and croissant",
+  items: [{ name: "Large latte", qty: 1, amount: "18.00" }, { name: "Croissant", qty: 1, amount: "6.50" }],
+  reference: "order_482",
+  redirect_url: "https://shop.example/thanks",
+}, { idempotencyKey: "order_482" });
+
+redirect(charge.hosted_url);
+```
+
+`idempotencyKey` is required. A retry with the same key within 24 hours returns
+the original charge, byte for byte, instead of creating another. The key is not
+bound to the request body, so never reuse one for a different order. Every field
+is described in [Charges](/charges#fields); `expires_at` also accepts a `Date`.
+
+```ts
+const charge = await keycat.retrieveCharge("chg_…");
+const page = await keycat.listCharges({ limit: 50, cursor });   // newest first
+await keycat.cancelCharge("chg_…");                              // only while open
+
+for await (const charge of keycat.iterateCharges()) {
+  // every charge, fetching pages as the loop asks for them
+}
+```
+
+## Events and webhooks
+
+```ts
+import { constructWebhookEvent, verifyWebhookSignature, signWebhookPayload } from "@keycatpay/sdk";
+
+const event = await constructWebhookEvent({ rawBody, signature, secret });   // throws if not authentic
+const valid = await verifyWebhookSignature({ rawBody, signature, secret });  // boolean
+const header = await signWebhookPayload({ payload, secret });                // for testing your handler
+
+for await (const event of keycat.iterateEvents()) {
+  if (event.delivered_at === null) await handle(event);
+}
+```
+
+`KeycatEvent` is a union discriminated on `type`, so `event.data` is typed for
+each event. See [Webhooks](/webhooks) for the payloads and the verification
+rules.
+
+## Settings
+
+```ts
+const { secret } = await keycat.configureWebhookEndpoint({ url: "https://shop.example/keycat" });
+await keycat.updateProfile({ name: "Joe's Coffee", website: "https://joes.example" });
+```
+
+`configureWebhookEndpoint` replaces the URL and the signing secret immediately.
+`updateProfile` replaces the public profile: text fields you leave out are
+cleared, and the avatar is kept.
+
+## Refunds
+
+The SDK has no refund method: refunds need your passkey. See
+[Refunds](/refunds).
+
+## Errors
+
+Every error extends `KeycatError`.
+
+| Class | When |
+| --- | --- |
+| `KeycatApiError` | The API answered with an error. Branch on `code` (stable); `message` is written for a person. It also has `status`, `details`, `body`, `headers`, and `retryable` (true for 429 and 5xx). |
+| `KeycatConnectionError` | No response arrived, so whether the API acted is unknown. |
+| `KeycatTimeoutError` | A `KeycatConnectionError` for an attempt that exceeded `timeoutMs`. |
+| `KeycatSignatureVerificationError` | A webhook failed verification. `reason` is `missing_header`, `malformed_header`, `timestamp_outside_tolerance`, `no_matching_signature`, or `invalid_payload`. |
+
+```ts
+try {
+  await keycat.cancelCharge(id);
+} catch (error) {
+  if (error instanceof KeycatApiError && error.code === "charge_not_open") {
+    // already paid, expired, or cancelled
+  }
+}
+```
+
+The codes are listed in the [HTTP API reference](/api#errors).
+
+## Options, retries, and cancellation
+
+```ts
+new KeycatClient({
+  apiKey,
+  timeoutMs: 30_000, // per attempt, including reading the body
+  maxRetries: 2,     // 0 disables retries
+  fetch,             // optional custom fetch, for example with a proxy
+  baseUrl,           // optional, defaults to https://api.keycat.net
+});
+
+await keycat.listCharges({}, { signal: AbortSignal.timeout(5_000), maxRetries: 0 });
+```
+
+Automatic retries cover connection failures and 408, 429, and 5xx responses.
+They back off with jitter and honour `Retry-After`. Only calls that are safe to
+send twice are retried: reads, `updateProfile`, and `createCharge`, which is safe
+because of its idempotency key. `cancelCharge` and `configureWebhookEndpoint` are
+never retried: a retried cancel reports `charge_not_open` for a cancellation that
+succeeded, and a retried webhook configuration replaces the secret you were
+given.

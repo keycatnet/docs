@@ -1,0 +1,103 @@
+---
+title: Your account and security
+description: Passkeys, the smart account that holds your money, devices and co-owners, and what an API key can and cannot do.
+---
+
+# Your account and security
+
+## Who controls the money
+
+Each business you create on Keycat has its own account on Base: a
+[Safe](https://safe.global) smart account. Your **passkey** owns it, meaning the
+device key you sign in with. Money leaves the account only when an owner signs:
+
+- **Withdrawals** (**Send money out** in the dashboard) to the one withdrawal
+  address saved under **Settings → Where you send money**.
+- **Refunds**, which send the refund straight to the address the customer
+  paid from. See [Refunds](/refunds).
+
+Keycat holds no key that can move your money. Each of those operations pays
+its network fee in USDC from your account, so you never need ETH. "Send all"
+sends everything except that operation's exact network fee reserve, which the
+review shows before you sign. The details are in
+[The business account](/protocol/account) and
+[Operations and network fees](/protocol/operations).
+
+## Your Keycat name
+
+The handle you choose for a business is also its name: `joescoffee` gives a
+payment page at `pay.keycat.net/joescoffee` and the ENS name
+`joescoffee.keycat.eth`. Wallets that support ENS resolve the name to your
+business account's address, along with its name, description, picture, and
+website from your profile.
+
+Payments that should be tracked go through a charge, a payment link, or your
+payment page: those are what produce receipts and webhooks.
+
+## Payout groups
+
+A payout group shares payments with other Keycat businesses, each by a fixed
+share; your business keeps the rest. Create one from your business's Home
+under **Payout groups**, then pick it when you create a payment link under
+**Request**, or
+pass its id as `payout_group` when you create a charge through the API. A link
+without a group pays your business only. You can also set a group for your
+payment page, which covers the payments visitors start there.
+
+Creating a group takes one confirmation with your passkey and a few cents from
+your balance, because your own account sets up the group's split. The split
+has no owner, so neither you nor Keycat can change its shares or take from it.
+Each payment reaches it first, and the split pays every payee and your
+business their shares, usually a few seconds later and within a minute at
+most. Until then your share shows beside your balance as on its way. See
+[Payout groups](/protocol/payouts) for the contract.
+
+A group never changes. To pay different people, create a new group and pick it
+for your links. Archiving a group hides it from new links; links that already
+use it keep sharing their payments. Refunding a payment made through a group
+comes from your balance, because its payees have already been paid.
+
+## Signing in
+
+You sign in at [app.keycat.net](https://app.keycat.net) with a passkey: Face ID,
+Touch ID, Windows Hello, or a security key. There is no password, and no
+password reset to attack.
+
+## More devices and co-owners
+
+One sign-in account can hold several businesses, and several passkeys.
+
+| You add | What it can do |
+| --- | --- |
+| A passkey on another device | View every business on the account. It cannot move money until approved. |
+| A **backup device** for a business | Sign for that business on its own, so losing one device doesn't lock you out. |
+| A **co-owner** for a business | Sign together with you. The business then needs more than one signature to move money. |
+
+Approving a device or co-owner is itself an owner-signed operation, done per
+business under **Settings → Who can approve money**. Add a backup device early:
+a passkey that existed only on a lost device cannot be recovered by anyone.
+See [Passkeys and owners](/protocol/passkeys).
+
+## API keys
+
+An API key belongs to one business. It can:
+
+- create, read, list, and cancel charges,
+- read and replay events,
+- set the webhook endpoint,
+- update the public profile.
+
+It can preview a refund ([`POST /v1/refunds`](/api#refunds)), but it cannot
+move money, complete a refund, or change who owns the account. Treat it
+as a secret anyway: anyone holding it can create charges in your name and see
+your sales.
+
+Keys are created under **Settings → Integrate**. Creating a new key does not
+disable older ones, and keys cannot yet be revoked from the dashboard. Create a
+new key only when you need one.
+
+## Webhook secrets
+
+The webhook signing secret is shown once, when you set the endpoint. Keycat
+stores it encrypted. Setting the endpoint again issues a new secret and retires
+the old one immediately.

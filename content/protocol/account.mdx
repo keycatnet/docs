@@ -1,0 +1,117 @@
+---
+title: The business account
+description: A SafeL2 1.4.1 smart account with Safe's ERC-4337 module, derived from your passkey and deployed by its first operation.
+---
+
+import { Callout } from "nextra/components";
+
+# The business account
+
+Every business on Keycat is its own [Safe](https://github.com/safe-global/safe-smart-account)
+smart account on Base. It is a standard Safe proxy, created through Safe's own
+factory with Safe's own singleton, so any tool that understands Safe can read
+it.
+
+| Part | Contract |
+| --- | --- |
+| Singleton | SafeL2 1.4.1 |
+| Proxy factory | SafeProxyFactory 1.4.1, `createProxyWithNonce` |
+| ERC-4337 support | Safe4337Module v0.3.0, enabled at creation and set as the fallback handler |
+| Module setup | SafeModuleSetup v0.3.0, delegatecalled once during `setup` |
+| EntryPoint | ERC-4337 EntryPoint v0.7 |
+| First owner | A SafeWebAuthnSigner v0.2.1 proxy for your passkey ([Passkeys](/protocol/passkeys)) |
+
+Addresses for all of them are in [Contracts](/protocol/contracts).
+
+## Why SafeL2
+
+SafeL2 and the plain Safe singleton report the same version and differ only in
+the events they emit. SafeL2 emits `SafeMultiSigTransaction` and
+`SafeModuleTransaction` on every execution, which is what Safe's Transaction
+Service indexes on L2 networks. A treasury on the plain singleton would not
+appear in Safe's own interface. The extra cost is roughly 7,000 to 10,000 gas
+per execution, a fraction of a cent on Base, and only on money going out:
+receiving a payment never executes Safe code.
+
+## The initializer
+
+The Safe is created with this exact `setup` call. Nothing about it changes
+after the business is created.
+
+```solidity
+Safe.setup(
+  _owners:          [signerProxy],          // your passkey's signer contract
+  _threshold:       1,
+  to:               SafeModuleSetup,
+  data:             enableModules([Safe4337Module]),
+  fallbackHandler:  Safe4337Module,
+  paymentToken:     address(0),
+  payment:          0,
+  paymentReceiver:  address(0)
+)
+```
+
+`setup` delegatecalls `SafeModuleSetup.enableModules`, so the 4337 module is
+already enabled when the Safe exists, and the first operation can run
+through it. Setting the module as the fallback handler alone would not be
+enough: `execTransactionFromModule` checks that the caller is an enabled
+module.
+
+## A counterfactual address
+
+The address is fixed before the Safe exists. SafeProxyFactory deploys with
+CREATE2, so the address is a function of the factory, the singleton, the
+initializer above and a salt:
+
+```text
+salt    = keccak256(keccak256(initializer) ‖ saltNonce)
+address = CREATE2(SafeProxyFactory, salt, keccak256(proxyCreationCode ‖ uint256(SafeL2)))
+```
+
+`saltNonce` is derived from Keycat's identifiers for your account and the
+business, so two businesses owned by the same passkey get two different
+accounts. Because the initializer names your signer contract, whose own
+address is derived from your passkey's public key, the account address is
+ultimately a function of your passkey.
+
+Keycat computes this derivation twice, independently, when you create a
+business, and refuses to create it if the two disagree. A wrong derivation
+would produce an address whose owner can never be deployed, which would
+freeze every payment sent to it.
+
+## Deployed by its first operation
+
+Nothing is deployed when you create a business. Payments can arrive at the
+counterfactual address straight away: USDC is a balance in the USDC contract,
+and it does not need code at the recipient.
+
+The Safe is deployed by its first ERC-4337 operation, usually your first
+withdrawal, refund or savings change. That operation carries the factory and
+`createProxyWithNonce` calldata in its `factory` and `factoryData` fields, so
+the EntryPoint deploys the Safe and runs the operation in one transaction. Its
+gas, deployment included, is paid from the Safe's own USDC
+([Operations and network fees](/protocol/operations)). A business with no
+USDC cannot deploy its account, and has nothing to move yet either.
+
+## Using the Safe outside Keycat
+
+Because the account is a standard Safe, its balance, owners, threshold and
+modules can be read with any Safe tooling or a block explorer, and its history
+is indexed by Safe's Transaction Service.
+
+<Callout type="warning">
+  Signing is the part that depends on Keycat. A passkey is bound to the
+  relying party `keycat.net`: your device will only produce a signature for a
+  page served from `keycat.net`. The signer contract on chain does not check
+  the origin, but your authenticator does, so another site cannot ask your
+  passkey to sign. That is the protection that stops a phishing page from
+  spending your money, and it also means that today the passkey signs only
+  through Keycat.
+</Callout>
+
+## Which money counts
+
+Your balance is canonical USDC on Base held by the Safe, plus your savings
+position in Aave (its aUSDC balance). Keycat reads both directly from Base,
+never from its own records. Other tokens sent to the address are held by the
+Safe, but Keycat does not show or move them.

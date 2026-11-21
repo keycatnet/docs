@@ -1,0 +1,55 @@
+/* Keycat's type stack over the theme's, per the design system. */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif;
+}
+
+.docs-logo { display: inline-flex; align-items: center; gap: .5rem; font-size: 1rem; }
+.docs-logo b { letter-spacing: -.01em; }
+.docs-logo span { color: rgb(110 110 115); font-weight: 500; }
+
+.docs-navlink { font-size: .875rem; font-weight: 500; opacity: .8; }
+.docs-navlink:hover { opacity: 1; }
+
+.docs-search { position: relative; display: flex; align-items: center; }
+.docs-search input {
+  inline-size: 12rem;
+  padding: .4rem 2rem .4rem .75rem;
+  border: 1px solid rgb(0 0 0 / .1);
+  border-radius: .5rem;
+  background: rgb(0 0 0 / .04);
+  font: inherit;
+  font-size: .875rem;
+  color: inherit;
+}
+.docs-search input:focus { outline: 2px solid hsl(211 100% 50%); outline-offset: 1px; }
+.docs-search input::-webkit-search-cancel-button { display: none; }
+.docs-search kbd {
+  position: absolute; inset-inline-end: .5rem;
+  padding: 0 .35rem; border: 1px solid rgb(0 0 0 / .12); border-radius: .3rem;
+  font-size: .7rem; color: rgb(110 110 115); pointer-events: none;
+}
+.docs-search ul {
+  position: absolute; z-index: 30; inset-block-start: calc(100% + .4rem); inset-inline-end: 0;
+  inline-size: min(26rem, calc(100vw - 2rem)); margin: 0; padding: .35rem;
+  border: 1px solid rgb(0 0 0 / .1); border-radius: .75rem;
+  background: #fff; box-shadow: 0 .75rem 2rem rgb(0 0 0 / .14); list-style: none;
+}
+.docs-search li a { display: grid; gap: .1rem; padding: .55rem .65rem; border-radius: .5rem; color: inherit; text-decoration: none; }
+.docs-search li[aria-selected="true"] a { background: hsl(211 100% 50% / .1); }
+.docs-search small { font-size: .7rem; color: rgb(110 110 115); text-transform: uppercase; letter-spacing: .04em; }
+.docs-search b { font-size: .9rem; font-weight: 600; }
+.docs-search span { font-size: .8rem; line-height: 1.35; color: rgb(90 90 95); }
+.docs-search-empty { padding: .7rem; font-size: .85rem; color: rgb(110 110 115); }
+
+/* next-themes puts the theme on <html class="dark">, so follow it rather than
+ * the OS setting; the reader may have chosen differently in the theme switch. */
+html.dark .docs-logo span, html.dark .docs-search small, html.dark .docs-search kbd, html.dark .docs-search-empty { color: rgb(152 152 157); }
+html.dark .docs-search input { border-color: rgb(255 255 255 / .12); background: rgb(255 255 255 / .06); }
+html.dark .docs-search kbd { border-color: rgb(255 255 255 / .16); }
+html.dark .docs-search ul { border-color: rgb(255 255 255 / .1); background: #1c1c1e; }
+html.dark .docs-search span { color: rgb(174 174 178); }
+
+@media (max-width: 48rem) {
+  .docs-search input { inline-size: 8rem; }
+  .docs-search kbd { display: none; }
+}

@@ -1,0 +1,123 @@
+---
+title: Operations and network fees
+description: How money leaves a business account as an ERC-4337 operation, why it never needs ETH, and exactly how its network fee is computed and capped.
+---
+
+# Operations and network fees
+
+Money leaves a business account only as an ERC-4337 user operation that the
+account's owners signed. This page covers what those operations can be, how
+they reach the network, and how they pay for gas in USDC.
+
+## The fixed menu
+
+Keycat builds operations from a fixed list. It never accepts calldata, a
+destination, an amount, gas values or paymaster data from a browser; it builds
+each operation from what it has stored and the action you chose.
+
+| Operation | What the Safe executes |
+| --- | --- |
+| Send | `USDC.transfer(savedWithdrawalAddress, amount)` |
+| Send, topped up from savings | `Pool.withdraw(USDC, shortfall, safe)` then `USDC.transfer(...)`, in one batch |
+| Refund | `USDC.transfer(customerOrConversionAddress, amount)`, after a savings withdrawal when one is needed ([Refunds](/refunds)) |
+| Turn savings on or off | The Roles modifier deployment, scoping and module changes ([Savings](/protocol/savings)) |
+| Make more available | `Pool.withdraw(USDC, amount, safe)` |
+| Create a payout group | `PushSplitFactory.createSplitDeterministic(...)` ([Payout groups](/protocol/payouts)) |
+| Add an owner | `addOwnerWithThreshold(signer, threshold)` |
+
+A withdrawal goes only to the address saved under **Settings → Where you send
+money**.
+
+## How an operation executes
+
+The Safe's 4337 module is both an enabled module and the Safe's fallback
+handler. The EntryPoint calls `validateUserOp` on the Safe, which the
+fallback handler forwards to the module; the module checks the owners'
+signatures over the `SafeOp` hash and pays the EntryPoint what the paymaster
+does not cover (here, nothing). Execution then calls the module's
+`executeUserOp(to, value, data, operation)`, which calls
+`execTransactionFromModule` on the Safe.
+
+- A single call uses `operation = 0` (call).
+- Two legs, such as a savings withdrawal followed by a transfer, are one
+  `MultiSendCallOnly` 1.4.1 batch that the Safe delegatecalls
+  (`operation = 1`). The `CallOnly` variant reverts if anything inside the
+  batch tries to delegatecall, so the batch cannot reach back and rewrite the
+  Safe's storage. One signature commits to both legs.
+
+Operations use nonce key 0 and run one at a time per business. A second
+operation waits until the first is mined or cancelled; this is why the
+dashboard sometimes says another approval is still finishing.
+
+Operations are submitted to a public ERC-4337 bundler and followed to their
+receipt. Keycat reports an operation as done only from its
+`UserOperationEvent` with `success = true` and the real transaction hash.
+`handleOps` itself succeeds even when an operation's inner call reverts, so
+the transaction's status alone proves nothing.
+
+## Gas in USDC
+
+The business account never holds ETH. Every operation names
+[Circle Paymaster](https://developers.circle.com/stablecoins/paymaster-overview)
+for EntryPoint v0.7 as its paymaster. Circle fronts the ETH for gas and
+charges the Safe in USDC after the operation runs.
+
+`paymasterData` is Circle's layout:
+
+```text
+uint8 mode (0) ‖ address token (USDC) ‖ uint256 permitAmount ‖ bytes permitSignature
+```
+
+**The first operation** carries a USDC permit (EIP-2612) signed by the Safe:
+your passkey signs the permit digest in its own ceremony, the Safe verifies it
+through ERC-1271, and Circle uses it to take its fee for that operation. The
+same operation also calls `USDC.approve(CirclePaymaster, allowance)`, so every
+later operation leaves the permit empty and Circle reads the allowance
+instead. The allowance is a fixed multiple of the per-operation cap
+(1,000 operations' worth), never `type(uint256).max`. It is a ceiling on what
+Circle may pull in total, not a payment: Circle takes only what each operation
+used.
+
+## What a network fee costs
+
+Before an operation runs, Circle reserves its worst case from the Safe's
+available USDC (the prefund), then refunds what the operation did not use.
+The prefund follows Circle's own contract:
+
+```text
+base    = (additionalGasCharge + Σ gas limits) × maxFeePerGas × usdcPerEth / 10¹⁸ + 1
+prefund = base + base × feeSpread / 10,000
+```
+
+`additionalGasCharge`, `feeSpread` and the USDC price of ETH are read from
+the paymaster at the moment the operation is built, not assumed. The gas
+limits are the operation's own call, verification and pre-verification
+limits, plus the paymaster's verification limit (200,000 gas once the Safe has
+approved Circle, 800,000 for the permit on the first operation) and its
+post-operation limit (100,000).
+
+Every review sheet shows the network fee as "up to" that amount, because it
+is the reserved maximum. What Circle actually charged is read afterwards from
+the `actualTokenNeeded` field of its `UserOperationSponsored` event, and is
+usually much less. On Base at its usual fee level, a send from an existing
+account reserves a cent or two.
+
+Two consequences follow from the prefund:
+
+- **Send all** sends your available balance less the exact prefund of that
+  operation. What is left behind afterwards is the prefund less the real fee,
+  as with any wallet's maximum.
+- **Savings cannot pay a prefund.** Circle takes the prefund during
+  validation, before a savings withdrawal in the same batch has run, so the
+  available balance must cover it. An operation that cannot be covered is
+  refused before you sign.
+
+Each operation is also capped: Keycat refuses to prepare one whose worst case
+exceeds its per-operation limit, and the gas limits and fee caps you sign
+bound what Circle can charge.
+
+## The first operation costs more
+
+An account that does not exist yet budgets for its deployment: the Safe proxy,
+module setup, permit and approval all run in its first operation. The review
+sheet for a first operation says it also sets the account up.

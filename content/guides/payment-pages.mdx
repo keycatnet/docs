@@ -1,0 +1,41 @@
+---
+title: Your payment page
+description: A public page at pay.keycat.net/your-handle where payers choose the amount, plus fixed-price payment links.
+---
+
+# Your payment page
+
+Every business has a public page at `pay.keycat.net/<handle>`. It shows your
+profile and a **Pay** button. The payer chooses the amount on checkout, which
+makes it a tip jar or a donation page, and Keycat takes no fee on it.
+
+```text
+https://pay.keycat.net/joescoffee
+```
+
+Anyone can open the page and start a payment, so a payment started here
+carries nothing you set: no amount, description or reference. Its charge has
+`source: "handle_page"`. It appears in your dashboard and API lists only once
+it is paid, and an abandoned one sends no `charge.expired` webhook.
+
+For a fixed price, create a charge yourself: a one-off one for an invoice or an
+order, or a reusable one as a payment link.
+
+## Payment links
+
+For a link with a fixed price that anyone can pay any number of times, create a
+reusable charge. Use **Request** in the dashboard, or the API:
+
+```ts
+const link = await keycat.createCharge({ amount: "50.00", reusable: true, description: "Monthly membership" }, { idempotencyKey: "membership-link" });
+// link.hosted_url never expires
+```
+
+Each payment to a reusable link sends its own `charge.paid` webhook. To put a
+link behind a button on your own site, use the [drop-in button](/guides/drop-in-button).
+
+## Your profile
+
+The name, description, picture, and links on the page come from
+**Settings → Profile**, or from [`PUT /v1/treasury/profile`](/api#profile).
+Search engines index your page only after it has received a payment.

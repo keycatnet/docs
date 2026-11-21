@@ -1,0 +1,110 @@
+---
+title: Savings
+description: How idle USDC is lent to Aave V3 through a Zodiac Roles modifier that lets Keycat supply on your behalf and do nothing else.
+---
+
+import { Callout } from "nextra/components";
+
+# Savings
+
+With savings on, Keycat keeps part of your balance available and lends the
+rest to the [Aave V3](https://aave.com) USDC market on Base, where it earns
+the market's supply rate. Your Safe holds the position as aUSDC. Only an
+owner's signature brings it back.
+
+## The permission
+
+Savings works through a [Zodiac Roles](https://github.com/gnosisguild/zodiac-modifier-roles)
+v2.1.1 modifier, one per business, owned by your Safe.
+
+- **Deployed for your Safe alone.** The modifier is a minimal proxy of the
+  Roles mastercopy, deployed through Zodiac's ModuleProxyFactory with
+  `setUp(owner, avatar, target)` all set to your Safe and salt nonce 0. Its
+  address is a function of your Safe's address, so you can compute it.
+- **Enabled as a module of your Safe.** Turning savings on is one batch your
+  passkey signs: deploy the modifier, `enableModule` it, scope the role below,
+  and assign that role to Keycat's savings operator.
+- **Scoped to two calls.** The role can reach exactly two functions, each with
+  its parameters pinned:
+
+```text
+Aave Pool  supply(asset, amount, onBehalfOf, referralCode)
+             asset         == USDC
+             amount        any
+             onBehalfOf    == your Safe
+             referralCode  == 0
+
+USDC       approve(spender, amount)
+             spender       == Aave Pool
+             amount        any
+```
+
+No other target and no other function is scoped, and the role carries no
+permission to send value or delegatecall. In particular `Pool.withdraw` and
+`USDC.transfer` are not in it. The modifier's owner is your Safe, so only your
+passkey can change the scope.
+
+The amount is deliberately not capped on chain. The worst a stolen savings
+operator key can do is move your available USDC into your own Aave position,
+which your passkey can withdraw.
+
+## When Keycat supplies
+
+Every fifteen minutes, and right after you save your savings settings, Keycat
+reviews each business with savings on, one at a time. It supplies only when
+all of these hold:
+
+- the modifier is still enabled on your Safe;
+- Aave's USDC utilisation on Base is below your pause threshold (90 to 95%,
+  default 95%), because new supply into a market that is nearly fully borrowed
+  may be slow to come back;
+- your available balance is above your buffer, 25 to 30% of your whole
+  balance (available plus saved);
+- the surplus is at least $0.10, and no more than a per-move cap.
+
+If Aave's allowance from your Safe is short, the operator first approves
+exactly the shortfall, as its own operation, then supplies. Every skipped
+review records why (`below_minimum`, `buffer_not_exceeded`,
+`supply_paused_for_liquidity`, `approval_pending` or
+`utilization_unavailable`), and the dashboard shows the reason.
+
+The operator pays the gas for these moves from its own account. They cost you
+nothing.
+
+## Taking money back
+
+Money in savings comes back only through operations your passkey signs:
+
+- **Make more available** calls `Pool.withdraw(USDC, amount, safe)`.
+- **Send** and **Refund** withdraw only the shortfall when your available
+  balance does not cover them, in the same signed batch as the transfer.
+
+Aave lets a supplier withdraw only what the market has not lent out. When
+utilisation is near 100%, a withdrawal can wait until borrowers repay or the
+rate draws in new supply. The 25 to 30% buffer and the pause threshold exist so
+that ordinary refunds and withdrawals do not depend on that. When your
+available balance falls under the buffer while the market is past the pause
+threshold, Keycat opens a liquidity alert on the savings screen and pushes it
+to your devices.
+
+## Turning savings off
+
+Turning savings off is one signed batch: `disableModule` removes the modifier
+from your Safe, and `USDC.approve(Pool, 0)` clears any allowance left. The
+saved balance stays in Aave, earning, until you withdraw it. A turned-off
+modifier can be enabled again later; it keeps its address.
+
+## Earnings
+
+Your savings balance is your Safe's aUSDC balance, read from Base. Earnings are
+that balance above your principal: everything the operator supplied, less
+everything an owner withdrew. A withdrawal counts fully against principal, so
+after one, earnings are understated rather than overstated. Keycat shows
+earnings after the fact and never advertises a rate.
+
+<Callout type="warning">
+  Lending carries risk. A defect in Aave's contracts, or a market that stays
+  fully borrowed, could delay or reduce what comes back. Keep in savings only
+  what you can leave there, and lower the share or turn savings off if that
+  changes.
+</Callout>

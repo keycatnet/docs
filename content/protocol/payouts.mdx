@@ -1,0 +1,74 @@
+---
+title: Payout groups
+description: Ownerless 0xSplits v2 push splits that your business account creates, and that pay every payee seconds after each payment.
+---
+
+# Payout groups
+
+A payout group shares each payment on a link with other Keycat businesses at
+fixed shares. On chain it is a [0xSplits](https://splits.org) v2 **push
+split**: a contract that holds the payments sent to it until someone calls
+`distribute`, then transfers each recipient's share directly to them.
+
+## Creating a group
+
+Your business account creates the split itself, as an operation your passkey
+signs, and pays its gas:
+
+```solidity
+PushSplitFactory.createSplitDeterministic(
+  params: {
+    recipients:            [payee1, payee2, …, yourBusiness],
+    allocations:           [shareBps1, shareBps2, …, restBps],
+    totalAllocation:       10_000,
+    distributionIncentive: 0
+  },
+  owner:   address(0),
+  creator: yourBusiness,
+  salt:    keccak256(groupId)
+)
+```
+
+- **Recipients** are the business accounts of the other Keycat businesses you
+  named by handle, then your own, which keeps the rest. Shares are basis
+  points that sum to 10,000; a recipient at 0% is left out, because a split
+  refuses a zero allocation.
+- **`owner = address(0)`** makes the split immutable. Nobody, including you and
+  Keycat, can change its recipients or shares. The `creator` is recorded but
+  has no power.
+- **`distributionIncentive = 0`**: whoever calls `distribute` takes no cut.
+- **The salt** is derived from the group's id, so the split's address is a
+  function of exactly what you signed. Keycat marks a group ready only after
+  reading from Base that a split with those parameters is deployed at that
+  address and that its owner is zero.
+
+The same payees at the same shares reuse the existing group, so you never pay
+twice for one split. To pay different people, you create a new group.
+Archiving a group hides it from new links; links already using it keep paying
+it.
+
+## Paying out
+
+A charge that names a group uses the split's address as Relay's recipient, so
+each payment lands in the split, not in your account. As soon as the payment
+is recorded, Keycat's payouts operator calls `distribute` on that split, and
+each recipient, your business included, receives its share in the same
+transaction, usually seconds after the customer paid. A backstop pays any
+split with a newer payment than its last payout on the next minute, and checks
+every split every fifteen minutes.
+
+`distribute` is permissionless. It is checked against the hash of the split's
+parameters, so the call must replay the recipients, allocations and incentive
+exactly, and it can only pay those recipients those shares. Keycat skips a
+payout when the split holds under $0.10 or Base gas is above a cap, and
+retries later. Keycat pays the gas for payouts.
+
+A push split keeps a unit or two of USDC dust after each payout, so the split's
+balance rarely reads exactly zero. Until a payout runs, your share shows beside
+your balance as on its way.
+
+## Refunds of a group payment
+
+The payees were paid when the payment arrived, so a refund of a payment made
+through a group comes from your business account alone. Keycat cannot pull a
+share back from a payee.

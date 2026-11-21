@@ -1,0 +1,61 @@
+---
+title: Keycat
+description: Accept card and crypto payments, settled in USDC on Base to an account only you control.
+---
+
+import { Cards } from "nextra/components";
+
+# Keycat
+
+Keycat takes payments for your business. A customer pays by card, or with a
+coin they already hold, from any wallet or exchange on a supported network.
+You receive USDC on Base, in an account that only your passkey can move money
+out of.
+
+<Cards>
+  <Cards.Card title="Quickstart" href="/quickstart" arrow />
+  <Cards.Card title="How customers pay" href="/payments" arrow />
+  <Cards.Card title="Webhooks" href="/webhooks" arrow />
+  <Cards.Card title="How Keycat works" href="/protocol" arrow />
+</Cards>
+
+## How it fits together
+
+1. You create a charge from your server, or share a payment link or your
+   payment page. Each one has a hosted checkout on `pay.keycat.net`.
+2. The customer pays by card, or in the coin they hold, on the network they
+   hold it on. Checkout shows the full price, fees included, before they pay.
+3. USDC arrives in your business account on Base. You receive the full
+   invoice amount; the payer covers the fees.
+4. Your server hears about it through a signed webhook, and can replay every
+   event at any time.
+
+## What to expect
+
+Your business account is a [Safe](/protocol/account) smart account on Base,
+and its owner is your passkey. Keycat holds no key that can move money out of
+it: every withdrawal and refund needs your signature.
+
+You receive 100% of the invoice. Fees are added to what the customer pays and
+never taken from what you receive. See [fees](/payments#fees).
+
+A payment that has settled to your account is final, a card payment included.
+The one exception is a reorganisation of the Base network, which Keycat
+reports as [`charge.reversed`](/webhooks#chargereversed).
+
+You never need ETH. The network fee for moving money out of your account is
+paid in USDC from that account.
+
+For the contracts, signatures and permissions behind all of this, read
+[How Keycat works](/protocol).
+
+## Where things live
+
+| | |
+| --- | --- |
+| Dashboard, API keys, webhooks, refunds | [app.keycat.net](https://app.keycat.net) |
+| Hosted checkout and receipts | `pay.keycat.net` |
+| Your payment page | `pay.keycat.net/<handle>` |
+| Your name on Ethereum | `<handle>.keycat.eth` |
+| API | `https://api.keycat.net` |
+| Node.js SDK | [`@keycatpay/sdk`](/sdk) |

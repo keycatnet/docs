@@ -1,0 +1,110 @@
+---
+title: Contracts and verification
+description: Every contract Keycat uses on Base and Ethereum, and commands to check your own business account against them.
+---
+
+# Contracts and verification
+
+Keycat writes no Solidity. Every contract below was written, audited and
+deployed by its publisher; Keycat pins each address, checks its code hash
+against the publisher's registry, and refuses to build an operation against
+an address it has not verified.
+
+## Base (chain id 8453)
+
+| Contract | Publisher | Address |
+| --- | --- | --- |
+| USDC (native, not bridged) | Circle | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| EntryPoint v0.7 | ERC-4337 | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
+| SafeL2 1.4.1 singleton | Safe | `0x29fcB43b46531BcA003ddC8FCB67FFE91900C762` |
+| SafeProxyFactory 1.4.1 | Safe | `0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67` |
+| Safe4337Module v0.3.0 | Safe | `0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226` |
+| SafeModuleSetup v0.3.0 | Safe | `0x2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47` |
+| SafeWebAuthnSignerFactory v0.2.1 | Safe | `0x1d31F259eE307358a26dFb23EB365939E8641195` |
+| MultiSendCallOnly 1.4.1 | Safe | `0x9641d764fc13c8B624c04430C7356C1C7C8102e2` |
+| P-256 verifier (RIP-7212 precompile) | Base | `0x0000000000000000000000000000000000000100` |
+| Circle Paymaster (EntryPoint v0.7) | Circle | `0x6C973eBe80dCD8660841D4356bf15c32460271C9` |
+| Aave V3 Pool | Aave | `0xA238Dd80C259a72e81d7e4664a9801593F98d1c5` |
+| Zodiac ModuleProxyFactory | Gnosis Guild | `0x000000000000aDdB49795b0f9bA5BC298cDda236` |
+| Zodiac Roles Modifier v2.1.1 mastercopy | Gnosis Guild | `0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5` |
+| PushSplitFactory v2.2 | Splits | `0x8E8eB0cC6AE34A38B67D5Cf91ACa38f60bc3Ecf4` |
+| PushSplit v2.2 implementation | Splits | `0x1e2086A7e84a32482ac03000D56925F607CCB708` |
+
+## Ethereum mainnet
+
+| Contract | Address |
+| --- | --- |
+| `keycat.eth` offchain resolver | `0xFA88f268a60F7E9a97Db7271dCB2E8468b841115` |
+
+Payments themselves are routed by [Relay](https://relay.link), whose deposit
+addresses are created per payment; see
+[Payment routing and settlement](/protocol/settlement).
+
+## Check your business account
+
+You need your business account's address (shown in the dashboard) and a Base
+RPC URL. These commands use Foundry's
+[`cast`](https://getfoundry.sh); any client that can make `eth_call` works.
+
+```bash
+SAFE=0xYourBusinessAccount
+RPC=https://mainnet.base.org
+
+# A Safe proxy pointing at SafeL2 1.4.1 (storage slot 0 holds the singleton)
+cast storage $SAFE 0 --rpc-url $RPC
+cast call $SAFE "VERSION()(string)" --rpc-url $RPC
+
+# Owners and threshold
+cast call $SAFE "getOwners()(address[])" --rpc-url $RPC
+cast call $SAFE "getThreshold()(uint256)" --rpc-url $RPC
+
+# Enabled modules: the 4337 module, plus your Roles modifier if savings is on
+cast call $SAFE "getModulesPaginated(address,uint256)(address[],address)" \
+  0x0000000000000000000000000000000000000001 10 --rpc-url $RPC
+```
+
+An account that has not run its first operation yet has no code, and these
+calls return nothing; its address is still yours ([why](/protocol/account#a-counterfactual-address)).
+
+Each owner is a passkey signer contract. Its configuration is your passkey's
+public key, and the factory reproduces its address from that key alone:
+
+```bash
+OWNER=0xOneOfTheOwners
+FACTORY=0x1d31F259eE307358a26dFb23EB365939E8641195
+
+# cast annotates large numbers ("123… [1.2e76]"), so keep the first column
+read X Y VERIFIERS < <(cast call $OWNER "getConfiguration()(uint256,uint256,uint176)" --rpc-url $RPC | awk '{print $1}' | xargs)
+cast call $FACTORY "getSigner(uint256,uint256,uint176)(address)" $X $Y $VERIFIERS --rpc-url $RPC   # equals $OWNER
+cast to-hex $VERIFIERS   # 0x100 followed by 40 zeros
+```
+
+`VERIFIERS` is `0x100 << 160`: the P-256 precompile at `0x100` in the top
+16 bits and no fallback verifier in the low 160.
+
+## Check the savings permission
+
+With savings on, the second module is your Roles modifier. Its owner, avatar
+and target are your Safe:
+
+```bash
+ROLES=0xYourRolesModifier
+cast call $ROLES "owner()(address)" --rpc-url $RPC    # your Safe
+cast call $ROLES "avatar()(address)" --rpc-url $RPC   # your Safe
+cast call $ROLES "target()(address)" --rpc-url $RPC   # your Safe
+```
+
+The role's scope is set by the `scopeTarget`, `scopeFunction` and
+`assignRoles` calls in the batch you signed to turn savings on; they are in
+that transaction on any block explorer, and [Savings](/protocol/savings)
+lists the conditions they set.
+
+## Check a payout group
+
+```bash
+SPLIT=0xYourGroupSplit
+cast call $SPLIT "owner()(address)" --rpc-url $RPC   # 0x0000…0000: nobody can change it
+```
+
+The split's recipients and allocations are in the `SplitCreated` event of the
+transaction that created it.

@@ -1,0 +1,121 @@
+---
+title: Passkeys and owners
+description: How a WebAuthn passkey becomes a Safe owner, what each signing ceremony signs, and how backup devices and co-owners are added.
+---
+
+# Passkeys and owners
+
+A passkey is a WebAuthn credential: a P-256 key pair whose private key never
+leaves your device's secure hardware or your platform's passkey manager.
+Keycat stores only the public key. Signing in and approving money both use the
+same passkey, in two deliberately different ceremonies.
+
+## The signer contract
+
+A Safe owner must be an address, and a P-256 key has no Ethereum address. Safe's
+passkey module bridges the two: `SafeWebAuthnSignerFactory` v0.2.1 deploys a
+small proxy, `SafeWebAuthnSignerProxy`, that holds your public key and answers
+ERC-1271 `isValidSignature` by checking a WebAuthn assertion against it.
+
+The proxy's address is deterministic:
+
+```text
+initCode = proxyCreationCode ‖ uint256(SafeWebAuthnSignerSingleton) ‖ x ‖ y ‖ uint256(verifiers)
+signer   = CREATE2(SafeWebAuthnSignerFactory, bytes32(0), keccak256(initCode))
+```
+
+`x` and `y` are your public key's coordinates. `verifiers` is a `uint176`
+that packs a precompile address in its top 16 bits and a fallback verifier
+contract in the low 160. Keycat uses Base's P-256 precompile (RIP-7212, at
+address `0x100`) and no fallback, so a signature check costs a few thousand
+gas instead of the hundreds of thousands a Solidity P-256 verifier needs. The
+factory's own `getSigner(x, y, verifiers)` returns the same address, which is
+how you can check it.
+
+The signer contract is published when it is first needed: when the first operation that
+needs its signature is about to be signed, Keycat calls the factory's
+permissionless `createSigner`. Anyone could make that call, and the result
+would be the same contract at the same address.
+
+## Signing in
+
+Sign-in is a discoverable WebAuthn authentication on the relying party
+`keycat.net`, from `https://app.keycat.net`, with an empty `allowCredentials`
+list, so your device offers whichever Keycat passkeys it holds. Keycat
+requires user verification (Face ID, a fingerprint, a device PIN), checks the
+origin, the relying party, the challenge and the signature counter, and then
+issues a session. A session lets you see your businesses and prepare
+operations. It cannot move money by itself.
+
+## Approving money
+
+Every operation that moves money is approved by a separate, one-use ceremony:
+
+- Its challenge is the exact digest being authorised: the `SafeOp` hash that
+  Safe4337Module computes (EIP-712, domain bound to chain 8453 and the module),
+  or the USDC permit digest for a business's first operation.
+- Its `allowCredentials` holds exactly one credential, the owner Keycat
+  expects to sign next.
+- It is single use, and Keycat checks the credential, origin, relying party,
+  challenge, counter, and that the credential is an active owner of that
+  business before the signature goes anywhere.
+
+Because the challenge is the operation's hash, the signature commits to every
+field of the operation: target, calldata, value, nonce, gas limits, fee caps
+and the paymaster data. Nothing can be changed between your review and the
+submission without invalidating it.
+
+### What goes on chain
+
+The authenticator returns `authenticatorData`, `clientDataJSON` and a DER
+signature. Keycat decodes the DER signature strictly into `r` and `s`, and
+splits `clientDataJSON` into the part after the challenge
+(`clientDataFields`). The signer contract rebuilds the JSON from the
+operation hash, so the challenge is never trusted from the client:
+
+```text
+clientDataJSON = '{"type":"webauthn.get","challenge":"' ‖ base64url(hash) ‖ '",' ‖ clientDataFields ‖ '}'
+message        = sha256(authenticatorData ‖ sha256(clientDataJSON))
+valid          = P256.verify(message, r, s, x, y)
+```
+
+Each owner's signature is wrapped as a Safe contract signature (`v = 0`, `r`
+the signer contract's address, `s` the offset of
+`abi.encode(authenticatorData, clientDataFields, r, s)` in the dynamic part),
+and the signatures are sorted by signer address as Safe requires.
+
+## Backup devices and co-owners
+
+One Keycat sign-in account can hold several passkeys and several businesses.
+Authority is recorded per passkey, per business:
+
+| State | Meaning |
+| --- | --- |
+| View only | The passkey can sign in and see the business. It is not an owner of the Safe. |
+| Pending | An owner has signed the operation that adds it, and it is on its way. |
+| Active | Its signer contract is an owner of the Safe. |
+
+A new passkey starts as view only. An existing owner turns it into an owner by
+signing an operation that calls `addOwnerWithThreshold(signer, threshold)` on
+each business they choose. Keycat publishes the new passkey's signer contract
+first, so the Safe gains an owner with code behind it.
+
+- A **backup device** keeps the threshold at 1. Either passkey can approve
+  money on its own, so losing one device does not lock you out.
+- A **co-owner** raises the threshold. Every operation then needs that many
+  owner signatures, collected one ceremony at a time; a half-signed operation
+  can be continued from another device. Keycat asks for a plain-language
+  confirmation before raising a threshold, because a threshold that the
+  remaining passkeys cannot meet locks the account for good.
+
+Keycat calls an account backed up only when every business it owns has at
+least two active owners.
+
+## Losing a passkey
+
+Passkeys synced by your platform (iCloud Keychain, Google Password Manager,
+and similar) survive the loss of one device. A passkey that lived only on a
+lost device, with no backup owner, cannot be recovered by Keycat or anyone
+else: there is no admin key and no reset path, which is the same property that
+stops Keycat from moving your money. Add a backup device before the account
+holds money you cannot afford to lose.

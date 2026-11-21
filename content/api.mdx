@@ -1,0 +1,219 @@
+---
+title: HTTP API
+description: Endpoints, authentication, idempotency, pagination, objects, and error codes.
+---
+
+import { Callout } from "nextra/components";
+
+# HTTP API
+
+```text
+https://api.keycat.net
+```
+
+Requests and responses are JSON. Every request authenticates with your
+business's secret key:
+
+```http
+Authorization: Bearer sk_live_…
+```
+
+<Callout>
+  The API is for servers. It does not answer cross-origin requests from
+  browsers, and your key must never reach one.
+</Callout>
+
+## Endpoints
+
+| Method | Path | Does |
+| --- | --- | --- |
+| `POST` | `/v1/charges` | Create a charge. Needs an `Idempotency-Key`. |
+| `GET` | `/v1/charges` | List charges, newest first. |
+| `GET` | `/v1/charges/{id}` | Retrieve a charge. |
+| `DELETE` | `/v1/charges/{id}` | Cancel an open charge. |
+| `GET` | `/v1/events` | List events, newest first, delivered or not. |
+| `POST` | `/v1/webhook-endpoint` | Set the webhook URL and get a new signing secret. |
+| `PUT` | `/v1/treasury/profile` | Replace the business's public profile. |
+| `POST` | `/v1/refunds` | Preview a refund (`preview: true`). Completing one needs the dashboard. |
+
+## Create a charge
+
+```bash
+curl https://api.keycat.net/v1/charges \
+  -H "Authorization: Bearer $KEYCAT_API_KEY" \
+  -H "Idempotency-Key: order_482" \
+  -H "Content-Type: application/json" \
+  -d '{"amount":"24.50","description":"Large latte","reference":"order_482"}'
+```
+
+Returns `201` with the [charge](#the-charge-object). Every request field is
+described in [Charges](/charges#fields).
+
+### Idempotency
+
+`Idempotency-Key` is required on `POST /v1/charges`: any string up to 255
+characters, such as your order id. Within 24 hours, the same key returns the
+original response, byte for byte, with no new charge. The key is not compared
+against the body, so a reused key with a different body still returns the first
+charge.
+
+## Retrieve, list, and cancel
+
+```bash
+curl https://api.keycat.net/v1/charges/chg_… -H "Authorization: Bearer $KEYCAT_API_KEY"
+curl "https://api.keycat.net/v1/charges?limit=50" -H "Authorization: Bearer $KEYCAT_API_KEY"
+curl -X DELETE https://api.keycat.net/v1/charges/chg_… -H "Authorization: Bearer $KEYCAT_API_KEY"
+```
+
+Cancelling returns `204`, or `409 charge_not_open` once the charge is paid,
+expired, or already cancelled.
+
+### Pagination
+
+List endpoints return:
+
+```json
+{ "data": [ … ], "next_cursor": "MjAyNi0xMC0wN1QxMjowMDowMC4wMDBafGNoZ18…" }
+```
+
+Pass `next_cursor` back as `?cursor=` for the next page; it is `null` on the
+last page. `limit` is 1 to 100 and defaults to 20. Cursors are opaque, and there
+is no offset.
+
+## The charge object
+
+```json
+{
+  "id": "chg_7c1f0e9a2b4d4c8e9f0a1b2c",
+  "status": "open",
+  "amount": "24.50",
+  "currency": "USD",
+  "description": "Large latte",
+  "items": [{ "name": "Large latte", "qty": 1, "amount": "24.50" }],
+  "entitlement": null,
+  "reusable": false,
+  "donation": false,
+  "reference": "order_482",
+  "expires_at": "2026-10-07T13:00:00.000Z",
+  "redirect_url": null,
+  "locale": null,
+  "payout_group": null,
+  "source": "api",
+  "hosted_url": "https://pay.keycat.net/c/7c1f0e9a2b4d4c8e9f0a1b2c",
+  "receipt_url": "https://pay.keycat.net/r/7c1f0e9a2b4d4c8e9f0a1b2c",
+  "created_at": "2026-10-07T12:00:00.000Z"
+}
+```
+
+`status` is one of `open`, `paid`, `underpaid`, `expired`, `cancelled`, or
+`reversed`; see [Statuses](/charges#statuses). `source` is `api`, `dashboard`,
+or `handle_page`; see [Fields](/charges#fields). Lists leave out a
+`handle_page` charge until it is paid. Amounts are strings, never
+numbers. The create response omits `donation`, which is always `false` for a
+charge created through the API.
+
+## Events
+
+```bash
+curl "https://api.keycat.net/v1/events?limit=100" -H "Authorization: Bearer $KEYCAT_API_KEY"
+```
+
+Each item is the [webhook payload](/webhooks#payload) plus `delivered_at`, which
+is when your endpoint acknowledged it, or `null`.
+
+## Webhook endpoint
+
+```bash
+curl https://api.keycat.net/v1/webhook-endpoint \
+  -H "Authorization: Bearer $KEYCAT_API_KEY" -H "Content-Type: application/json" \
+  -d '{"url":"https://shop.example/keycat"}'
+```
+
+```json
+{ "url": "https://shop.example/keycat", "secret": "whsec_…", "created_at": "…" }
+```
+
+The URL must be public HTTPS: no IP addresses, `localhost`, or `.local` hosts.
+The secret is returned only here. Calling this again replaces the URL and the
+secret immediately. You can also set the endpoint in the dashboard under
+**Settings → Integrate**.
+
+## Profile
+
+`PUT /v1/treasury/profile` replaces the public profile shown on checkout and on
+your payment page.
+
+```json
+{ "name": "Joe's Coffee", "description": "Espresso bar", "website": "https://joes.example", "twitter": "joescoffee", "telegram": "joescoffee" }
+```
+
+`name` is required (1 to 120 characters). URLs must be HTTPS. Text fields you
+leave out are cleared, while the avatar is kept unless you send `avatar`.
+
+## Refunds
+
+A refund moves money out of your account, so only your passkey can complete
+it, in the dashboard ([Refunds](/refunds)). An API key can ask what a refund
+would do:
+
+```bash
+curl https://api.keycat.net/v1/refunds \
+  -H "Authorization: Bearer $KEYCAT_API_KEY" -H "Content-Type: application/json" \
+  -d '{"charge":"chg_…","payment":"pay_…","amount":"10.00","preview":true}'
+```
+
+```json
+{
+  "amount": "10.00",
+  "plan": {
+    "destination": "0x…",
+    "chain_name": "Arbitrum",
+    "symbol": "ETH",
+    "send_amount": "9.98",
+    "send_to": "0x…",
+    "sending_cost": "0.02",
+    "conversion_fee_usd": "0.04",
+    "arrives": "0.0055",
+    "relay_deposit_address": "0x…"
+  }
+}
+```
+
+`destination` is the address recorded for that payment, in full. `send_amount`
+is what leaves your account (the refund less `sending_cost`, the operation's
+network fee reserve). For a payment that was not USDC on Base, `send_to` is a
+Relay deposit address that converts it back, and `arrives` is what the
+customer receives in their coin. Nothing is prepared or sent. Always send
+`preview: true` from an API key: without it, the API prepares an operation that
+only a passkey can sign, and holds it until it expires.
+
+## Errors
+
+Errors have a stable `code` and a `message` written for a person:
+
+```json
+{ "error": { "code": "charge_not_open", "message": "Only an open charge can be cancelled." } }
+```
+
+| Status | `code` | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_request` | A field is missing or malformed. `message` says which. |
+| 400 | `idempotency_key_required` | `POST /v1/charges` without an `Idempotency-Key` up to 255 characters. |
+| 400 | `invalid_webhook_url` | The webhook URL is not public HTTPS. |
+| 400 | `invalid_profile` | The profile has no name, or a link is not HTTPS. |
+| 401 | `authentication_required` | No `Authorization: Bearer sk_…` header. |
+| 401 | `authentication_failed` | The key is not valid. |
+| 404 | `not_found` | No such charge for this business, or no such endpoint. |
+| 405 | `method_not_allowed` | The path exists but not with this method. |
+| 400 | `payout_group_unavailable` | The `payout_group` is not set up and active for this business. |
+| 400 | `payment_required` | A refund needs `payment`, the payment to refund. |
+| 409 | `charge_not_open` | Only an open charge can be cancelled. |
+| 409 | `insufficient_refundable_amount` | The refund is more than is left to refund on that payment. |
+| 409 | `refund_unavailable` | The payment has no refund address: a card payment (`reason: "card"`) or one made before checkout asked (`reason: "no_address"`). |
+| 409 | `refund_below_sending_cost` | The refund is no larger than the cost of sending it. |
+| 409 | `insufficient_balance` | The balance cannot cover the refund and its fee. `maximum_refund_usdc` says the most it could be. |
+| 503 | `refund_quote_unavailable` | A refund in the customer's coin cannot be priced right now. Retry shortly. |
+| 503 | `webhooks_unavailable` | Webhook setup is temporarily unavailable. Retry later. |
+
+Retry `429` and `5xx` responses with backoff. Anything else fails the same way
+until the request changes.

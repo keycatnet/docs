@@ -1,0 +1,61 @@
+---
+title: Refunds
+description: Refund a payment from the dashboard. It goes back to where the customer paid from, in the coin they used.
+---
+
+import { Callout, Steps } from "nextra/components";
+
+# Refunds
+
+Refunds are issued from the dashboard. A refund moves money out of your
+account, and only your passkey can authorise that, so an API key cannot
+complete one. Your server can [preview](/api#refunds) what a refund would
+send.
+
+<Steps>
+
+### Open the payment
+
+In [app.keycat.net](https://app.keycat.net), open your business and choose the
+payment under **Payments**, then enter the amount and an optional reason. A
+late or duplicate payment under **Needs attention** opens the same screen.
+Each refund is for one payment: partial refunds add up, up to what that
+payment was, so on a reusable link one customer cannot be refunded what
+another paid.
+
+The screen shows where the refund goes, in full. When your customer paid,
+checkout asked where they were paying from: from a wallet app, a refund goes
+back to the address that sent the payment; from an exchange account, it goes
+to the deposit address they entered.
+
+### Review it
+
+The review shows the amount, the customer's address, the coin and network,
+the cost of sending it, and what your customer receives. A payment made in
+USDC on Base is refunded in USDC on Base. A payment made in anything else is
+converted back to that coin on that network on the way.
+
+### Confirm with your passkey
+
+Confirming signs one transfer from your account, and the refund leaves then.
+There is no link to pass on and nothing for the customer to collect.
+
+</Steps>
+
+Your customer bears the cost of sending a refund, as they bear every fee: the
+network fee comes out of what is sent, and a conversion's cost comes out of
+what arrives. A refund no larger than the cost of sending it is refused.
+
+When the refund reaches your customer, your webhook receives
+`refund.succeeded`, with `amount` (what you refunded), `paid_amount` (what left
+after the cost of sending), `destination` and `transaction_hash`. A refund
+paid in USDC on Base is done when your transfer confirms; a converted one is
+done when the conversion delivers, usually within a minute. If a conversion
+cannot be delivered, the money comes back to your account and your webhook
+receives `refund.failed`.
+
+<Callout>
+  Card payments, and payments made before checkout asked where customers pay
+  from, cannot be refunded through Keycat, because there is no address to send
+  them to. Arrange those refunds with your customer directly.
+</Callout>
